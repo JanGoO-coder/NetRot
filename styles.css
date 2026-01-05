@@ -1,0 +1,155 @@
+/* =========================================================================
+   NETROT STYLES - v7
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   1. CARD BADGE (Top-Left on Browse Cards, Always Visible)
+   ------------------------------------------------------------------------- */
+.netrot-card-badge {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    z-index: 100;
+
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    background: rgba(0, 0, 0, 0.85);
+    border-radius: 3px;
+    padding: 3px 6px;
+
+    font-family: 'Netflix Sans', 'Helvetica Neue', Arial, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+
+    pointer-events: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.netrot-card-badge .netrot-imdb {
+    color: #f5c518;
+}
+
+.netrot-card-badge .netrot-rt {
+    color: #fa320a;
+}
+
+/* -------------------------------------------------------------------------
+   2. DETAIL MODAL RATING CARDS (Above Description)
+   ------------------------------------------------------------------------- */
+.netrot-detail-ratings {
+    margin: 16px 0;
+}
+
+.netrot-ratings-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.netrot-rating-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    background: #2a2a2a;
+    border-radius: 4px;
+    padding: 10px 14px;
+    min-width: 120px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.netrot-rating-card:hover {
+    background: #333;
+    transform: scale(1.02);
+}
+
+.netrot-card-icon {
+    font-size: 24px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+}
+
+.netrot-imdb-card .netrot-card-icon {
+    color: #f5c518;
+}
+
+.netrot-rt-card .netrot-card-icon {
+    color: #fa320a;
+}
+
+.netrot-card-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.netrot-card-score {
+    font-family: 'Netflix Sans', 'Helvetica Neue', Arial, sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.2;
+}
+
+.netrot-card-source {
+    font-family: 'Netflix Sans', 'Helvetica Neue', Arial, sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* -------------------------------------------------------------------------
+   3. ANIMATIONS
+   ------------------------------------------------------------------------- */
+.netrot-card-badge,
+.netrot-detail-ratings {
+    animation: netrotFadeIn 0.25s ease-out;
+}
+
+@keyframes netrotFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-3px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* -------------------------------------------------------------------------
+   4. RESPONSIVE ADJUSTMENTS
+   ------------------------------------------------------------------------- */
+@media (max-width: 600px) {
+    .netrot-detail-ratings {
+        gap: 8px;
+    }
+
+    .netrot-rating-card {
+        padding: 8px 10px;
+        min-width: 100px;
+    }
+
+    .netrot-card-icon {
+        font-size: 20px;
+        width: 28px;
+        height: 28px;
+    }
+
+    .netrot-card-score {
+        font-size: 16px;
+    }
+}

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NetRot Settings</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>NetRot Settings</h1>
+    </div>
+    
+    <div class="section">
+      <label for="apiKey">OMDB API Key</label>
+      <input type="text" id="apiKey" placeholder="Enter your OMDB API Key">
+      <p class="hint">Get a free key at <a href="http://www.omdbapi.com/apikey.aspx" target="_blank">omdbapi.com</a></p>
+    </div>
+
+    <div class="section">
+      <label class="toggle">
+        <input type="checkbox" id="showImdb" checked>
+        <span class="slider"></span>
+        Show IMDb Ratings
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="showRotten" checked>
+        <span class="slider"></span>
+        Show Rotten Tomatoes
+      </label>
+    </div>
+
+    <div class="section">
+      <button id="saveBtn">Save Settings</button>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="footer">
+      <button id="clearCache" class="secondary">Clear Cache</button>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
