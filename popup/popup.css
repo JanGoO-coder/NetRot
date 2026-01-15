@@ -119,3 +119,43 @@ input:checked+.slider {
 input:checked+.slider:before {
     transform: translateX(20px);
 }
+
+/* Section Titles */
+.section-title {
+    font-size: 12px;
+    color: #999;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+/* Cache Statistics */
+.stats-section {
+    background: #1a1a1a;
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 15px;
+}
+
+.cache-stats {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+}
+
+.cache-stats .stat {
+    color: #888;
+}
+
+.cache-stats .stat strong {
+    color: #fff;
+    font-weight: 600;
+}
+
+/* Footer */
+.footer {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #333;
+}

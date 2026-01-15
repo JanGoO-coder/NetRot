@@ -206,8 +206,9 @@
 /* -------------------------------------------------------------------------
    3. ANIMATIONS
    ------------------------------------------------------------------------- */
-.netrot-card-badge,
-.netrot-detail-ratings {
+.netrot-card-badge.netrot-loaded,
+.netrot-detail-ratings.netrot-loaded,
+.netrot-hover-ratings.netrot-loaded {
     animation: netrotFadeIn 0.25s ease-out;
 }
 
@@ -224,7 +225,67 @@
 }
 
 /* -------------------------------------------------------------------------
-   4. RESPONSIVE ADJUSTMENTS
+   4. LOADING STATES
+   ------------------------------------------------------------------------- */
+.netrot-loading {
+    opacity: 0.6;
+}
+
+.netrot-loaded {
+    opacity: 1;
+    transition: opacity 0.2s ease;
+}
+
+.netrot-skeleton {
+    display: inline-block;
+    width: 60px;
+    height: 14px;
+    background: linear-gradient(90deg, #2a2a2a 25%, #3a3a3a 50%, #2a2a2a 75%);
+    background-size: 200% 100%;
+    animation: netrotShimmer 1.5s infinite;
+    border-radius: 2px;
+}
+
+.netrot-card-badge .netrot-skeleton {
+    width: 80px;
+    height: 12px;
+}
+
+.netrot-detail-ratings .netrot-skeleton {
+    width: 120px;
+    height: 40px;
+}
+
+.netrot-hover-ratings .netrot-skeleton {
+    width: 100px;
+    height: 16px;
+}
+
+@keyframes netrotShimmer {
+    0% {
+        background-position: 200% 0;
+    }
+
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+/* Loading pulse animation */
+@keyframes netrotPulse {
+
+    0%,
+    100% {
+        opacity: 0.4;
+    }
+
+    50% {
+        opacity: 0.7;
+    }
+}
+
+/* -------------------------------------------------------------------------
+   5. RESPONSIVE ADJUSTMENTS
    ------------------------------------------------------------------------- */
 @media (max-width: 600px) {
     .netrot-detail-ratings {

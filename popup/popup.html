@@ -37,8 +37,26 @@
     </div>
 
     <div class="section">
+      <label class="section-title">Advanced</label>
+      <label class="toggle">
+        <input type="checkbox" id="debugMode">
+        <span class="slider"></span>
+        Debug Logging
+      </label>
+    </div>
+
+    <div class="section">
       <button id="saveBtn">Save Settings</button>
       <div id="status" class="status"></div>
+    </div>
+
+    <div class="section stats-section">
+      <label class="section-title">Cache Statistics</label>
+      <div id="cacheStats" class="cache-stats">
+        <span class="stat">Memory: <strong id="memoryCount">-</strong></span>
+        <span class="stat">Storage: <strong id="storageCount">-</strong></span>
+        <span class="stat">Pending: <strong id="pendingCount">-</strong></span>
+      </div>
     </div>
 
     <div class="footer">

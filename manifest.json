@@ -19,6 +19,7 @@
       ],
       "js": [
         "utils.js",
+        "ratings-store.js",
         "content.js"
       ],
       "css": [
