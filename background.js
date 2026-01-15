@@ -1,89 +1,122 @@
 /**
  * Background Service Worker
- * Handles API calls to OMDB and caching.
+ * Handles API calls to OMDb and caching strategies.
  */
 
-// Default API Key (Ideally this should be user configurable or hosted)
-// For this demo, using a placeholder. User will need to provide one or we use a public one.
-// IMPORTANT: OMDB requires an API key. I will use a placeholder here.
-const DEFAULT_OMDB_API_KEY = "dummy_key"; // User must replace this or we implement a settings flow.
+// NOTE: Using a public demo key for 'The' searches often works, but users should provide their own.
+// We will rely on user settings for the key.
+const DEFAULT_API_KEY = '';
 
 chrome.runtime.onInstalled.addListener(() => {
-    console.log('NetRot extension installed');
+    console.log('[NetRot] Extension installed/updated.');
 });
 
+// Message Listener
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'FETCH_Ratings') {
-        handleFetchRatings(request.title, request.year, sendResponse);
-        return true; // Will respond asynchronously
+        fetchRatingsWithCache(request.title, request.year, sendResponse);
+        return true; // Keep channel open for async response
     }
 });
 
 /**
- * Fetch ratings from OMDB API
- * @param {string} title 
- * @param {string} year 
- * @param {Function} sendResponse 
+ * Orchestrates Cache Check -> API Fetch -> Cache Save
  */
-async function handleFetchRatings(title, year, sendResponse) {
+async function fetchRatingsWithCache(title, year, sendResponse) {
     try {
-        // Check Cache first
-        const cacheKey = `rating_${title}_${year || 'NA'}`;
-        const cachedData = await chrome.storage.local.get(cacheKey);
+        const cleanTitle = normalizeTitle(title);
+        const cacheKey = `rating_${cleanTitle}_${year || 'NA'}`;
 
-        if (cachedData[cacheKey]) {
-            // Check for expiry (e.g., 7 days)
-            const cacheEntry = cachedData[cacheKey];
-            const now = Date.now();
-            if (now - cacheEntry.timestamp < 7 * 24 * 60 * 60 * 1000) {
-                sendResponse({ success: true, data: cacheEntry.data, source: 'cache' });
-                return;
-            }
-        }
+        // 1. Check Local Storage
+        const storage = await chrome.storage.local.get([cacheKey, 'omdbApiKey']);
+        const cachedEntry = storage[cacheKey];
+        const apiKey = storage.omdbApiKey || DEFAULT_API_KEY;
 
-        // Determine API Key
-        const settings = await chrome.storage.local.get('omdbApiKey');
-        const apiKey = settings.omdbApiKey || DEFAULT_OMDB_API_KEY;
-
-        if (apiKey === 'dummy_key') {
-            // We can't fetch without a key. 
-            // Real implementation would either fallback to another source or error out.
-            // For development purpose, we'll return a mock error if no key is set, 
-            // asking usage to set it in Popup.
-            sendResponse({ success: false, error: 'API Key missing' });
+        // Check if cache is valid (7 days)
+        if (cachedEntry && isCacheValid(cachedEntry.timestamp)) {
+            console.log(`[NetRot] Cache hit for "${title}"`);
+            sendResponse({ success: true, data: cachedEntry.data, source: 'cache' });
             return;
         }
 
-        let url = `https://www.omdbapi.com/?t=${encodeURIComponent(title)}&apikey=${apiKey}&tomatoes=true`;
-        if (year) url += `&y=${year}`;
+        if (!apiKey) {
+            sendResponse({ success: false, error: 'NO_API_KEY' });
+            return;
+        }
 
-        const response = await fetch(url);
-        const data = await response.json();
+        // 2. Fetch from API
+        // Simple rate limiting: minimal delay if needed, but OMDb is usually generous to individuals.
+        // We will just fetch directly here.
+        const data = await fetchFromOmdb(cleanTitle, year, apiKey);
 
-        if (data.Response === 'True') {
-            const result = {
-                imdbRating: data.imdbRating,
-                imdbVotes: data.imdbVotes,
-                Ratings: data.Ratings, // Contains RT score if available
-                Year: data.Year,
-                Title: data.Title
-            };
+        if (data && data.Response === 'True') {
+            const unifiedData = normalizeOmdbResponse(data);
 
-            // Cache the result
+            // 3. Save to Cache
             await chrome.storage.local.set({
                 [cacheKey]: {
                     timestamp: Date.now(),
-                    data: result
+                    data: unifiedData
                 }
             });
 
-            sendResponse({ success: true, data: result, source: 'api' });
+            sendResponse({ success: true, data: unifiedData, source: 'api' });
         } else {
-            sendResponse({ success: false, error: data.Error });
+            // Cache the failure too? Maybe for a shorter time to avoid re-fetching bad titles often?
+            // For now, let's just return error.
+            sendResponse({ success: false, error: data?.Error || 'Unknown Error' });
         }
 
     } catch (error) {
-        console.error('Fetch error:', error);
+        console.error('[NetRot] Background error:', error);
         sendResponse({ success: false, error: error.message });
     }
+}
+
+/**
+ * Call OMDb API
+ */
+async function fetchFromOmdb(title, year, apiKey) {
+    let url = `https://www.omdbapi.com/?t=${encodeURIComponent(title)}&apikey=${apiKey}&tomatoes=true`;
+    if (year) {
+        // Netflix year ranges like "2015-2019", we just take the start year
+        const y = year.substring(0, 4);
+        url += `&y=${y}`;
+    }
+
+    try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+    } catch (e) {
+        console.error('[NetRot] OMDb Fetch failed:', e);
+        return null;
+    }
+}
+
+/**
+ * Normalize Data Model
+ */
+function normalizeOmdbResponse(data) {
+    return {
+        title: data.Title,
+        year: data.Year,
+        imdbRating: data.imdbRating,
+        imdbVotes: data.imdbVotes,
+        metascore: data.Metascore !== 'N/A' ? data.Metascore : null,
+        Ratings: data.Ratings || [], // Keep original array for flexible UI logic
+        fetchedAt: Date.now()
+    };
+}
+
+/**
+ * Helpers
+ */
+function normalizeTitle(title) {
+    return title.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+}
+
+function isCacheValid(timestamp) {
+    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+    return (Date.now() - timestamp) < SEVEN_DAYS;
 }

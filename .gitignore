@@ -1,0 +1,3 @@
+# Releases directory - contains packed zip files for distribution
+# Ignore all zip files in this directory
+*.zip

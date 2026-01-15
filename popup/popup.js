@@ -6,11 +6,13 @@ function saveOptions() {
     const apiKey = document.getElementById('apiKey').value;
     const showImdb = document.getElementById('showImdb').checked;
     const showRotten = document.getElementById('showRotten').checked;
+    const showMetacritic = document.getElementById('showMetacritic').checked;
 
     chrome.storage.local.set({
         omdbApiKey: apiKey,
         showImdb: showImdb,
-        showRotten: showRotten
+        showRotten: showRotten,
+        showMetacritic: showMetacritic
     }, () => {
         const status = document.getElementById('status');
         status.textContent = 'Options saved.';
@@ -24,11 +26,13 @@ function restoreOptions() {
     chrome.storage.local.get({
         omdbApiKey: '',
         showImdb: true,
-        showRotten: true
+        showRotten: true,
+        showMetacritic: true
     }, (items) => {
         document.getElementById('apiKey').value = items.omdbApiKey;
         document.getElementById('showImdb').checked = items.showImdb;
         document.getElementById('showRotten').checked = items.showRotten;
+        document.getElementById('showMetacritic').checked = items.showMetacritic;
     });
 }
 

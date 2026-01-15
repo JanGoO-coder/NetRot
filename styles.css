@@ -36,6 +36,86 @@
     color: #fa320a;
 }
 
+.netrot-card-badge .netrot-meta {
+    color: #66cc33;
+}
+
+/* Badge Item Layout */
+.netrot-badge-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.netrot-badge-icon {
+    font-size: 11px;
+}
+
+.netrot-badge-score {
+    font-weight: 700;
+}
+
+.netrot-badge-label {
+    font-size: 9px;
+    opacity: 0.7;
+    text-transform: uppercase;
+}
+
+/* N/A State - dimmed appearance */
+.netrot-badge-item.netrot-na {
+    opacity: 0.5;
+}
+
+.netrot-badge-item.netrot-na .netrot-badge-score {
+    color: #888;
+}
+
+/* -------------------------------------------------------------------------
+   HOVER CARD RATINGS (Mini Modal)
+   ------------------------------------------------------------------------- */
+.netrot-hover-ratings {
+    margin: 8px 0;
+    padding: 0 16px;
+}
+
+.netrot-hover-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.netrot-hover-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.netrot-hover-item small {
+    font-size: 10px;
+    opacity: 0.6;
+    text-transform: uppercase;
+}
+
+.netrot-hover-item.netrot-imdb {
+    color: #f5c518;
+}
+
+.netrot-hover-item.netrot-rt {
+    color: #fa320a;
+}
+
+.netrot-hover-item.netrot-meta {
+    color: #66cc33;
+}
+
+/* N/A State for hover items */
+.netrot-hover-item.netrot-na {
+    opacity: 0.5;
+    color: #888;
+}
+
 /* -------------------------------------------------------------------------
    2. DETAIL MODAL RATING CARDS (Above Description)
    ------------------------------------------------------------------------- */
@@ -86,6 +166,19 @@
 
 .netrot-rt-card .netrot-card-icon {
     color: #fa320a;
+}
+
+.netrot-meta-card .netrot-card-icon {
+    color: #66cc33;
+}
+
+/* N/A State for detail cards */
+.netrot-na-card {
+    opacity: 0.5;
+}
+
+.netrot-na-card .netrot-card-score {
+    color: #888;
 }
 
 .netrot-card-content {

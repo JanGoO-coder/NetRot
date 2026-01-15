@@ -1,12 +1,10 @@
 {
   "manifest_version": 3,
   "name": "NetRot - Netflix Ratings Overlay",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Integrates Rotten Tomatoes and IMDb ratings into Netflix.",
   "permissions": [
-    "storage",
-    "scripting",
-    "activeTab"
+    "storage"
   ],
   "host_permissions": [
     "*://*.omdbapi.com/*"
@@ -16,9 +14,16 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.netflix.com/*"],
-      "js": ["utils.js", "content.js"],
-      "css": ["styles.css"],
+      "matches": [
+        "*://*.netflix.com/*"
+      ],
+      "js": [
+        "utils.js",
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
       "run_at": "document_end"
     }
   ],
@@ -34,11 +39,5 @@
     "16": "assets/icon16.png",
     "48": "assets/icon48.png",
     "128": "assets/icon128.png"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["assets/*"],
-      "matches": ["*://*.netflix.com/*"]
-    }
-  ]
+  }
 }

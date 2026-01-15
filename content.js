@@ -1,6 +1,6 @@
 /**
- * NetRot Content Script - v7
- * Injects IMDb and Rotten Tomatoes ratings into Netflix UI.
+ * NetRot Content Script
+ * Injects IMDb, Rotten Tomatoes, and Metacritic ratings into Netflix UI.
  */
 
 (function () {
@@ -8,95 +8,116 @@
 
     const NETROT_MARKER = 'netrot-injected';
     let observer = null;
+    let userSettings = {
+        showImdb: true,
+        showRotten: true,
+        showMetacritic: true
+    };
 
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
     function init() {
-        console.log('[NetRot] Initializing content script v7...');
+        console.log('[NetRot] Initializing content script...');
 
-        observer = new MutationObserver(debounce(scanAndInject, 300));
+        // Initial settings sync
+        syncSettings();
+
+        // Watch for dynamic content loading (infinite scroll, modal opens)
+        observer = new MutationObserver(debounce(scanAndInject, 500));
         observer.observe(document.body, { childList: true, subtree: true });
 
         scanAndInject();
-        console.log('[NetRot] Observer started.');
     }
 
     // =========================================================================
-    // MAIN SCAN FUNCTION
+    // MAIN SCANNER
     // =========================================================================
     function scanAndInject() {
-        scanMovieCards();
-        scanDetailViews();
+        scanBrowseCards();
+        scanDetailModals();
+        scanHoverCards(); // "JawBone" mini-previews
     }
 
-    // =========================================================================
-    // MOVIE CARDS (Browse thumbnails - Top-Left Badge)
-    // =========================================================================
-    function scanMovieCards() {
-        const cardSelectors = [
+    function scanBrowseCards() {
+        // Selectors for various thumbnail types
+        const selectors = [
             '.slider-item',
             '.title-card-container',
-            '.boxart-round',
-            '[data-list-context] .title-card',
+            '.boxart-round'
         ];
 
-        const cards = document.querySelectorAll(cardSelectors.join(', '));
+        const cards = document.querySelectorAll(selectors.join(', '));
+        cards.forEach(card => {
+            if (card.hasAttribute(NETROT_MARKER)) return;
+
+            const title = extractTitle(card);
+            if (title) {
+                card.setAttribute(NETROT_MARKER, 'true');
+                // Pass null for year in browse view as it's hard to extract reliability without opening
+                fetchRatings(title, null, (data) => injectCardBadge(card, data));
+            }
+        });
+    }
+
+    function scanDetailModals() {
+        // The full screen or large overlay
+        const modals = document.querySelectorAll('.previewModal--container, .detail-modal, [data-uia="preview-modal-container"]');
+
+        modals.forEach(modal => {
+            // Check if we already injected into the specific details container
+            const container = modal.querySelector('.previewModal--detailsMetadata');
+            if (container && container.hasAttribute(NETROT_MARKER)) return;
+
+            const title = extractTitleFromModal(modal);
+            const year = extractYearFromModal(modal);
+
+            if (title) {
+                if (container) container.setAttribute(NETROT_MARKER, 'true');
+                fetchRatings(title, year, (data) => injectDetailRatings(modal, data));
+            }
+        });
+    }
+
+    function scanHoverCards() {
+        // The expanding card when hovering a thumbnail (mini-modal)
+        // Netflix uses various class names; try multiple selectors
+        const selectors = [
+            '.mini-modal',
+            '.bob-card',
+            '.previewModal--wrapper',
+            '.jawBoneContainer',
+            '.bob-container'
+        ];
+
+        const cards = document.querySelectorAll(selectors.join(', '));
 
         cards.forEach(card => {
             if (card.hasAttribute(NETROT_MARKER)) return;
 
-            const title = extractTitleFromCard(card);
-            if (!title) return;
-
-            card.setAttribute(NETROT_MARKER, 'true');
-            fetchRatings(title, (data) => {
-                if (data) injectCardBadge(card, data);
-            });
+            const title = extractTitleFromModal(card);
+            if (title) {
+                card.setAttribute(NETROT_MARKER, 'true');
+                fetchRatings(title, null, (data) => injectHoverCardRatings(card, data));
+            }
         });
     }
 
     // =========================================================================
-    // DETAIL VIEWS (Full modal when clicking)
+    // DATA EXTRACTION
     // =========================================================================
-    function scanDetailViews() {
-        const modalSelectors = [
-            '.previewModal--container',
-            '.jawBoneContainer',
-            '.jawBone',
-            '.detail-modal',
-            '[data-uia="preview-modal-container"]',
-        ];
-
-        const modals = document.querySelectorAll(modalSelectors.join(', '));
-
-        modals.forEach(modal => {
-            if (modal.hasAttribute(NETROT_MARKER)) return;
-
-            const title = extractTitleFromModal(modal);
-            if (!title) return;
-
-            console.log('[NetRot] Found detail modal for:', title);
-            modal.setAttribute(NETROT_MARKER, 'true');
-
-            fetchRatings(title, (data) => {
-                if (data) injectDetailRatings(modal, data);
-            });
-        });
-    }
-
-    // =========================================================================
-    // TITLE EXTRACTION
-    // =========================================================================
-    function extractTitleFromCard(card) {
-        const img = card.querySelector('img');
-        if (img && img.alt) return cleanTitle(img.alt);
-
-        const ariaEl = card.querySelector('[aria-label]') || card.closest('[aria-label]');
+    function extractTitle(element) {
+        // 1. Aria Label (often best)
+        const ariaEl = element.querySelector('[aria-label], a[aria-label]');
         if (ariaEl) return cleanTitle(ariaEl.getAttribute('aria-label'));
 
-        const fallback = card.querySelector('.fallback-text');
-        if (fallback && fallback.textContent) return cleanTitle(fallback.textContent);
+        // 2. Image Alt
+        const img = element.querySelector('img');
+        if (img && img.alt) return cleanTitle(img.alt);
+
+        // 3. Text fallback
+        const textEl = element.querySelector('.fallback-text, .title-title');
+        if (textEl) return cleanTitle(textEl.textContent);
 
         return null;
     }
@@ -105,156 +126,217 @@
         const logo = modal.querySelector('.previewModal--player-titleTreatment-logo, img.logo');
         if (logo && logo.alt) return cleanTitle(logo.alt);
 
-        const titleText = modal.querySelector('.previewModal--section-header, h3, .title-title');
-        if (titleText && titleText.textContent) return cleanTitle(titleText.textContent);
+        const header = modal.querySelector('.previewModal--section-header, h3');
+        if (header) return cleanTitle(header.textContent);
 
-        if (modal.getAttribute('aria-label')) return cleanTitle(modal.getAttribute('aria-label'));
+        return extractTitle(modal);
+    }
 
-        const anyImg = modal.querySelector('img[alt]');
-        if (anyImg && anyImg.alt) return cleanTitle(anyImg.alt);
-
-        return null;
+    function extractYearFromModal(modal) {
+        // Look for the year span usually found in metadata
+        // Structure often: <span class="year">2022</span>
+        const yearEl = modal.querySelector('.year, .duration');
+        if (yearEl && /^\d{4}$/.test(yearEl.textContent)) {
+            return yearEl.textContent;
+        }
+        // Fallback: try to find any 4-digit number in metadata text
+        const metaText = modal.innerText;
+        const match = metaText.match(/\b(19|20)\d{2}\b/);
+        return match ? match[0] : null;
     }
 
     function cleanTitle(title) {
         if (!title) return null;
-        return title.trim().replace(/\s+/g, ' ').split(':')[0].trim();
+        return title
+            .replace(/Netflix/i, '')
+            .split(':')[0] // Removes subtitles like "Stranger Things: Season 4" -> "Stranger Things"
+            .trim();
     }
 
     // =========================================================================
-    // API FETCH
+    // API INTERACTION
     // =========================================================================
-    function fetchRatings(title, callback) {
-        console.log('[NetRot] Fetching ratings for:', title);
-        try {
-            chrome.runtime.sendMessage({ type: 'FETCH_Ratings', title: title }, (response) => {
-                if (chrome.runtime.lastError) {
-                    console.warn('[NetRot] Extension context issue:', chrome.runtime.lastError.message);
-                    callback(null);
-                    return;
-                }
-                if (response && response.success && response.data) {
-                    console.log('[NetRot] Got ratings:', response.data);
-                    callback(response.data);
-                } else {
-                    console.log('[NetRot] No ratings found:', response?.error);
-                    callback(null);
-                }
-            });
-        } catch (e) {
-            console.warn('[NetRot] Message send failed:', e.message);
-            callback(null);
-        }
+    function fetchRatings(title, year, callback) {
+        chrome.runtime.sendMessage({
+            type: 'FETCH_Ratings',
+            title: title,
+            year: year
+        }, (response) => {
+            if (chrome.runtime.lastError) return;
+            if (response && response.success) {
+                callback(response.data);
+            }
+        });
     }
 
     // =========================================================================
-    // UI INJECTION - CARD BADGE (Top-Left on Browse Cards)
+    // UI INJECTION
     // =========================================================================
     function injectCardBadge(card, data) {
-        const html = buildBadgeHtml(data);
-        if (!html) return;
+        if (!shouldShow(data)) return;
 
         const badge = document.createElement('div');
         badge.className = 'netrot-card-badge';
-        badge.innerHTML = html;
+        badge.innerHTML = buildBadgeHtml(data);
 
-        const style = getComputedStyle(card);
-        if (style.position === 'static') {
+        // Ensure parent is relative for absolute positioning of badge
+        if (getComputedStyle(card).position === 'static') {
             card.style.position = 'relative';
         }
-
         card.appendChild(badge);
     }
 
-    // =========================================================================
-    // UI INJECTION - DETAIL MODAL RATINGS (Above Description)
-    // =========================================================================
     function injectDetailRatings(modal, data) {
-        const html = buildDetailRatingsHtml(data);
-        if (!html) return;
+        if (!shouldShow(data)) return;
+
+        // GUARD: Prevent duplicate injection
+        if (modal.querySelector('.netrot-detail-ratings')) {
+            console.log('[NetRot] Ratings already present, skipping injection.');
+            return;
+        }
 
         const container = document.createElement('div');
         container.className = 'netrot-detail-ratings';
-        container.innerHTML = html;
+        container.innerHTML = buildDetailCardsHtml(data);
 
-        const descriptionSelectors = [
-            '.previewModal--text',
-            '.synopsis',
-            '.previewModal--synopsis',
-        ];
-
-        let targetElement = null;
-        for (const selector of descriptionSelectors) {
-            targetElement = modal.querySelector(selector);
-            if (targetElement) break;
-        }
-
-        if (targetElement && targetElement.parentNode) {
-            targetElement.parentNode.insertBefore(container, targetElement);
-            console.log('[NetRot] Injected ratings above description.');
+        // Insert above the synopsis/text
+        const synopsis = modal.querySelector('.previewModal--text, .synopsis, .previewModal--synopsis');
+        if (synopsis && synopsis.parentNode) {
+            synopsis.parentNode.insertBefore(container, synopsis);
         } else {
-            const infoSection = modal.querySelector('.previewModal--info');
-            if (infoSection) {
-                infoSection.insertBefore(container, infoSection.firstChild);
+            // Fallback: insert after button row
+            const buttonRow = modal.querySelector('.previewModal--metadatAndControls, .buttonControls');
+            if (buttonRow) {
+                buttonRow.parentNode.insertBefore(container, buttonRow.nextSibling);
+            } else {
+                modal.appendChild(container);
             }
         }
+    }
+
+    function injectHoverCardRatings(card, data) {
+        if (!shouldShow(data)) return;
+
+        // GUARD: Prevent duplicate injection
+        if (card.querySelector('.netrot-hover-ratings')) return;
+
+        const container = document.createElement('div');
+        container.className = 'netrot-hover-ratings';
+        container.innerHTML = buildHoverRatingsHtml(data);
+
+        // Try to insert near the genre tags or metadata area
+        const metaArea = card.querySelector('.previewModal--tags, .previewModal--metadatAndControls-container, .evidence-list');
+        if (metaArea && metaArea.parentNode) {
+            metaArea.parentNode.insertBefore(container, metaArea.nextSibling);
+        } else {
+            // Fallback: append at the end of info section
+            const infoSection = card.querySelector('.previewModal--info, .bob-overview');
+            if (infoSection) {
+                infoSection.appendChild(container);
+            }
+        }
+    }
+
+    function shouldShow(data) {
+        // Option A: Always show badges if at least one rating source is enabled
+        // The actual N/A fallback is handled in the HTML builders
+        return userSettings.showImdb || userSettings.showRotten || userSettings.showMetacritic;
     }
 
     // =========================================================================
     // HTML BUILDERS
     // =========================================================================
     function buildBadgeHtml(data) {
-        let parts = [];
+        let items = [];
 
-        if (data.imdbRating && data.imdbRating !== 'N/A') {
-            parts.push(`<span class="netrot-imdb">★ ${data.imdbRating}</span>`);
+        // IMDb - always show if enabled
+        if (userSettings.showImdb) {
+            const imdbScore = (data.imdbRating && data.imdbRating !== 'N/A') ? data.imdbRating : 'N/A';
+            const naClass = imdbScore === 'N/A' ? ' netrot-na' : '';
+            items.push(`<span class="netrot-badge-item netrot-imdb${naClass}"><span class="netrot-badge-icon">★</span><span class="netrot-badge-score">${imdbScore}</span><span class="netrot-badge-label">IMDb</span></span>`);
         }
 
-        const rt = data.Ratings?.find(r => r.Source === 'Rotten Tomatoes');
-        if (rt) {
-            parts.push(`<span class="netrot-rt">🍅 ${rt.Value}</span>`);
+        // Rotten Tomatoes - always show if enabled
+        if (userSettings.showRotten) {
+            const rt = data.Ratings?.find(r => r.Source === 'Rotten Tomatoes');
+            const rtScore = rt ? rt.Value : 'N/A';
+            const naClass = rtScore === 'N/A' ? ' netrot-na' : '';
+            items.push(`<span class="netrot-badge-item netrot-rt${naClass}"><span class="netrot-badge-icon">🍅</span><span class="netrot-badge-score">${rtScore}</span><span class="netrot-badge-label">RT</span></span>`);
         }
 
-        return parts.length > 0 ? parts.join('') : null;
+        // Metacritic - always show if enabled
+        if (userSettings.showMetacritic) {
+            const metaScore = (data.metascore && data.metascore !== 'N/A') ? data.metascore : 'N/A';
+            const naClass = metaScore === 'N/A' ? ' netrot-na' : '';
+            items.push(`<span class="netrot-badge-item netrot-meta${naClass}"><span class="netrot-badge-icon">M</span><span class="netrot-badge-score">${metaScore}</span><span class="netrot-badge-label">Meta</span></span>`);
+        }
+
+        return items.join('');
     }
 
-    function buildDetailRatingsHtml(data) {
+    function buildHoverRatingsHtml(data) {
+        // Compact horizontal strip for hover cards - always show all three
+        let items = [];
+
+        if (userSettings.showImdb) {
+            const imdbScore = (data.imdbRating && data.imdbRating !== 'N/A') ? data.imdbRating : 'N/A';
+            const naClass = imdbScore === 'N/A' ? ' netrot-na' : '';
+            items.push(`<span class="netrot-hover-item netrot-imdb${naClass}">★ ${imdbScore} <small>IMDb</small></span>`);
+        }
+        if (userSettings.showRotten) {
+            const rt = data.Ratings?.find(r => r.Source === 'Rotten Tomatoes');
+            const rtScore = rt ? rt.Value : 'N/A';
+            const naClass = rtScore === 'N/A' ? ' netrot-na' : '';
+            items.push(`<span class="netrot-hover-item netrot-rt${naClass}">🍅 ${rtScore} <small>RT</small></span>`);
+        }
+        if (userSettings.showMetacritic) {
+            const metaScore = (data.metascore && data.metascore !== 'N/A') ? data.metascore : 'N/A';
+            const naClass = metaScore === 'N/A' ? ' netrot-na' : '';
+            items.push(`<span class="netrot-hover-item netrot-meta${naClass}">M ${metaScore} <small>Meta</small></span>`);
+        }
+        return `<div class="netrot-hover-row">${items.join('')}</div>`;
+    }
+
+    function buildDetailCardsHtml(data) {
         let cards = [];
 
-        if (data.imdbRating && data.imdbRating !== 'N/A') {
-            cards.push(`
-                <div class="netrot-rating-card netrot-imdb-card">
-                    <div class="netrot-card-icon">★</div>
-                    <div class="netrot-card-content">
-                        <div class="netrot-card-score">${data.imdbRating}</div>
-                        <div class="netrot-card-source">IMDb</div>
-                    </div>
-                </div>
-            `);
+        // IMDb - always show if enabled
+        if (userSettings.showImdb) {
+            const imdbScore = (data.imdbRating && data.imdbRating !== 'N/A') ? data.imdbRating : 'N/A';
+            const naClass = imdbScore === 'N/A' ? ' netrot-na-card' : '';
+            cards.push(createCard('IMDb', imdbScore, '★', 'netrot-imdb-card' + naClass));
         }
 
-        const rt = data.Ratings?.find(r => r.Source === 'Rotten Tomatoes');
-        if (rt) {
-            cards.push(`
-                <div class="netrot-rating-card netrot-rt-card">
-                    <div class="netrot-card-icon">🍅</div>
-                    <div class="netrot-card-content">
-                        <div class="netrot-card-score">${rt.Value}</div>
-                        <div class="netrot-card-source">Rotten Tomatoes</div>
-                    </div>
-                </div>
-            `);
+        // Rotten Tomatoes - always show if enabled
+        if (userSettings.showRotten) {
+            const rt = data.Ratings?.find(r => r.Source === 'Rotten Tomatoes');
+            const rtScore = rt ? rt.Value : 'N/A';
+            const naClass = rtScore === 'N/A' ? ' netrot-na-card' : '';
+            cards.push(createCard('Rotten Tomatoes', rtScore, '🍅', 'netrot-rt-card' + naClass));
         }
 
-        if (cards.length === 0) return null;
+        // Metacritic - always show if enabled
+        if (userSettings.showMetacritic) {
+            const metaScore = (data.metascore && data.metascore !== 'N/A') ? data.metascore : 'N/A';
+            const naClass = metaScore === 'N/A' ? ' netrot-na-card' : '';
+            cards.push(createCard('Metacritic', metaScore, 'M', 'netrot-meta-card' + naClass));
+        }
 
-        // Wrap cards in a flex row container
         return `<div class="netrot-ratings-row">${cards.join('')}</div>`;
     }
 
-    // =========================================================================
-    // UTILITIES
-    // =========================================================================
+    function createCard(source, score, icon, className) {
+        return `
+            <div class="netrot-rating-card ${className}">
+                <div class="netrot-card-icon">${icon}</div>
+                <div class="netrot-card-content">
+                    <div class="netrot-card-score">${score}</div>
+                    <div class="netrot-card-source">${source}</div>
+                </div>
+            </div>
+        `;
+    }
+
     function debounce(func, wait) {
         let timeout;
         return function (...args) {
@@ -263,12 +345,27 @@
         };
     }
 
-    // =========================================================================
-    // START
-    // =========================================================================
+    function syncSettings() {
+        chrome.storage.local.get(['showImdb', 'showRotten', 'showMetacritic'], (items) => {
+            // Only update keys that exist in items
+            if (items) {
+                userSettings = { ...userSettings, ...items };
+            }
+        });
+    }
+
+    // Listen for changes
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+        if (namespace === 'local') {
+            syncSettings();
+        }
+    });
+
+    // Start
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
         init();
     }
+
 })();
