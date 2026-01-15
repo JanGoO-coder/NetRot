@@ -60,31 +60,86 @@ class CacheManager {
         };
     }
 
-    async get(title, year) {
-        const keys = this.getSearchKeys(title, year);
+    async get(videoId, title, year) {
+        // 1. Try to find a valid key to lookup
+        const keys = this.getSearchKeys(videoId, title, year);
 
+        // Helper to check and resolve pointer
+        const resolve = async (key, source) => {
+            let value = source === 'memory' ? this.memoryCache.get(key) : (await chrome.storage.local.get(this.STORAGE_PREFIX + key))[this.STORAGE_PREFIX + key];
+
+            if (!value) return null;
+
+            // Check if it is a pointer (string)
+            if (typeof value === 'string' && value.startsWith('netrot_')) {
+                log(`Resolved pointer "${key}" -> "${value}"`);
+                // Follow pointer (recurse once)
+                const targetKey = value;
+                // Check memory first for target
+                if (this.memoryCache.has(targetKey)) {
+                    const target = this.memoryCache.get(targetKey);
+                    if (this.isValid(target)) return { data: target.data, source: 'memory_linked' };
+                }
+                // Check storage
+                const storedTarget = await chrome.storage.local.get(this.STORAGE_PREFIX + targetKey);
+                const targetEntry = storedTarget[this.STORAGE_PREFIX + targetKey];
+
+                if (targetEntry && this.isValid(targetEntry)) {
+                    // Cache the target in memory for speed
+                    this.memoryCache.set(targetKey, targetEntry);
+                    return { data: targetEntry.data, source: 'storage_linked' };
+                }
+                return null; // Pointer dead end
+            }
+
+            // Not a pointer, normal entry
+            if (this.isValid(value)) {
+                return { data: value.data, source };
+            }
+
+            return null;
+        }
+
+        // 2. Check Memory
         for (const key of keys) {
             if (this.memoryCache.has(key)) {
-                const entry = this.memoryCache.get(key);
-                if (this.isValid(entry)) {
-                    log(`Memory cache hit for "${title}"`);
-                    return { data: entry.data, source: 'memory' };
+                const result = await resolve(key, 'memory');
+                if (result) {
+                    log(`Memory hit for "${key}"`);
+                    return result;
                 } else {
                     this.memoryCache.delete(key);
                 }
             }
         }
 
+        // 3. Check Storage
         const storageKeys = keys.map(k => this.STORAGE_PREFIX + k);
         try {
             const stored = await chrome.storage.local.get(storageKeys);
 
-            for (const key of storageKeys) {
-                if (stored[key] && this.isValid(stored[key])) {
-                    log(`Storage cache hit for "${title}"`);
-                    const cacheKey = key.replace(this.STORAGE_PREFIX, '');
-                    this.memoryCache.set(cacheKey, stored[key]);
-                    return { data: stored[key].data, source: 'storage' };
+            for (const key of keys) {
+                const storageKey = this.STORAGE_PREFIX + key;
+                if (stored[storageKey]) {
+                    let val = stored[storageKey];
+
+                    // Pointer check
+                    if (typeof val === 'string' && val.startsWith('netrot_')) {
+                        log(`Storage found pointer "${key}" -> "${val}"`);
+                        const targetKey = this.STORAGE_PREFIX + val;
+                        const targetRes = await chrome.storage.local.get(targetKey);
+                        const targetVal = targetRes[targetKey];
+
+                        if (targetVal && this.isValid(targetVal)) {
+                            this.memoryCache.set(val, targetVal); // Cache absolute target
+                            this.memoryCache.set(key, val); // Cache pointer
+                            return { data: targetVal.data, source: 'storage' };
+                        }
+                    } else if (this.isValid(val)) {
+                        log(`Storage hit for "${key}"`);
+                        this.memoryCache.set(key, val);
+                        return { data: val.data, source: 'storage' };
+                    }
                 }
             }
         } catch (e) {
@@ -94,10 +149,22 @@ class CacheManager {
         return null;
     }
 
-    async set(title, year, data) {
-        const key = this.getPrimaryKey(title, year);
-        const ttl = this.getTTL(data);
+    async set(videoId, title, year, data) {
+        if (videoId && !data.netflixId) {
+            data.netflixId = videoId;
+        }
 
+        // Define the Master Key
+        // If we have a videoId, that IS the master key.
+        // If not, we fall back to Title_Year as master (legacy mode).
+        let masterKey = null;
+        if (videoId) {
+            masterKey = `netrot_${videoId}`;
+        } else {
+            masterKey = this.getPrimaryKey(null, title, year);
+        }
+
+        const ttl = this.getTTL(data);
         const entry = {
             data,
             timestamp: Date.now(),
@@ -105,55 +172,80 @@ class CacheManager {
             completeness: year ? 'full' : 'partial'
         };
 
-        this.memoryCache.set(key, entry);
+        const storageUpdates = {};
+
+        // 1. Store Master Record
+        this.memoryCache.set(masterKey, entry);
+        storageUpdates[this.STORAGE_PREFIX + masterKey] = entry;
+
+        // 2. Create Pointers for Secondary Keys
+        // Only if we are using ID-based master key.
+        const secondaryKeys = [];
+
+        // Title Keys
+        if (title) {
+            const normalized = this.normalizeTitle(title);
+            secondaryKeys.push(normalized);
+            if (year) {
+                secondaryKeys.push(`${normalized}_${year.substring(0, 4)}`);
+            }
+        }
+
+        // IMDb Key
+        if (data.imdbId) {
+            secondaryKeys.push(data.imdbId);
+        }
+
+        // Process Secondary Keys
+        for (const secKey of secondaryKeys) {
+            if (secKey === masterKey) continue; // Don't point to self
+
+            if (videoId) {
+                // If we have a master ID, make these POINTERS
+                this.memoryCache.set(secKey, masterKey);
+                storageUpdates[this.STORAGE_PREFIX + secKey] = masterKey;
+            } else {
+                // Legacy mode: No ID, so we must copy (duplication)
+                this.memoryCache.set(secKey, entry);
+                storageUpdates[this.STORAGE_PREFIX + secKey] = entry;
+            }
+        }
 
         try {
-            const storageUpdates = {
-                [this.STORAGE_PREFIX + key]: entry
-            };
-
-            if (data.imdbId) {
-                this.memoryCache.set(data.imdbId, entry);
-                storageUpdates[this.STORAGE_PREFIX + data.imdbId] = entry;
-            }
-
-            if (data.normalizedTitle && data.normalizedTitle !== key) {
-                this.memoryCache.set(data.normalizedTitle, entry);
-                storageUpdates[this.STORAGE_PREFIX + data.normalizedTitle] = entry;
-            }
-
             await chrome.storage.local.set(storageUpdates);
+            log(`Saved for ${masterKey} (+${Object.keys(storageUpdates).length - 1} pointers)`);
         } catch (e) {
             logError('Storage write error:', e);
         }
     }
 
-    hasPendingRequest(key) {
-        return this.pendingRequests.has(key);
-    }
+    // ... pending request methods ...
+    hasPendingRequest(key) { return this.pendingRequests.has(key); }
+    getPendingRequest(key) { return this.pendingRequests.get(key) || null; }
+    setPendingRequest(key, promise) { this.pendingRequests.set(key, promise); }
+    deletePendingRequest(key) { this.pendingRequests.delete(key); }
 
-    getPendingRequest(key) {
-        return this.pendingRequests.get(key) || null;
-    }
 
-    setPendingRequest(key, promise) {
-        this.pendingRequests.set(key, promise);
-    }
+    getSearchKeys(videoId, title, year) {
+        const keys = [];
 
-    deletePendingRequest(key) {
-        this.pendingRequests.delete(key);
-    }
-
-    getSearchKeys(title, year) {
-        const normalized = this.normalizeTitle(title);
-        const keys = [normalized];
-        if (year) {
-            keys.unshift(`${normalized}_${year.substring(0, 4)}`);
+        if (videoId) {
+            keys.push(`netrot_${videoId}`);
         }
+
+        if (title) {
+            const normalized = this.normalizeTitle(title);
+            keys.push(normalized);
+            if (year) {
+                keys.unshift(`${normalized}_${year.substring(0, 4)}`);
+            }
+        }
+
         return keys;
     }
 
-    getPrimaryKey(title, year) {
+    getPrimaryKey(videoId, title, year) {
+        if (videoId) return `netrot_${videoId}`;
         const normalized = this.normalizeTitle(title);
         return year ? `${normalized}_${year.substring(0, 4)}` : normalized;
     }
@@ -170,12 +262,17 @@ class CacheManager {
     }
 
     isValid(entry) {
-        if (!entry || !entry.timestamp) return false;
+        if (!entry) return false;
+        // If entry is a pointer string, it's valid structurally
+        if (typeof entry === 'string') return true;
+
+        if (!entry.timestamp) return false;
         const ttl = entry.ttl || this.TTL.SUCCESS_FULL;
         return (Date.now() - entry.timestamp) < ttl;
     }
 
     async getStats() {
+        // ... (existing implementation)
         let storageCount = 0;
         try {
             const allItems = await chrome.storage.local.get(null);
@@ -235,7 +332,7 @@ const rateLimiter = new RateLimiter(10, 1000);
 // ============================================================================
 
 chrome.runtime.onInstalled.addListener(() => {
-    console.log('[NetRot] Extension installed/updated.');  // Always log on install
+    console.log('[NetRot] Extension installed/updated.');
 });
 
 // ============================================================================
@@ -243,17 +340,15 @@ chrome.runtime.onInstalled.addListener(() => {
 // ============================================================================
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    // Handle both old message type (FETCH_Ratings) and new (FETCH_RATINGS)
     if (request.type === 'FETCH_RATINGS' || request.type === 'FETCH_Ratings') {
         handleFetchRatings(request, sendResponse);
-        return true; // Keep channel open for async response
+        return true;
     }
-
+    // ... cache stats ...
     if (request.type === 'GET_CACHE_STATS') {
         handleGetCacheStats(sendResponse);
         return true;
     }
-
     if (request.type === 'CLEAR_CACHE') {
         handleClearCache(sendResponse);
         return true;
@@ -265,144 +360,93 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // ============================================================================
 
 /**
- * Handle ratings fetch request with cache-first strategy and incremental enrichment
+ * Handle ratings fetch request with cache-first strategy
+ */
+/**
+ * Handle ratings fetch request with cache-first strategy
  */
 async function handleFetchRatings(request, sendResponse) {
-    const { title, year, enrichExisting } = request;
+    const { videoId, title, year, enrichExisting, checkFreshness } = request;
 
     try {
-        const normalizedTitle = normalizeTitle(title);
-        const requestKey = cacheManager.getPrimaryKey(title, year);
+        const normalizedTitle = title ? cacheManager.normalizeTitle(title) : null;
+        const requestKey = cacheManager.getPrimaryKey(videoId, title, year);
 
         // Check for pending request (deduplication)
         if (cacheManager.hasPendingRequest(requestKey)) {
-            log(`Deduplicating request for "${title}"`);
+            log(`Deduplicating request for "${title || videoId}"`);
             const result = await cacheManager.getPendingRequest(requestKey);
             sendResponse(result);
             return;
         }
 
         // Check cache first
-        const cached = await cacheManager.get(title, year);
+        const cached = await cacheManager.get(videoId, title, year);
 
         if (cached) {
             const cachedData = cached.data;
 
-            // Check if we should enrich partial data
-            // Enrich if: we have a year now, but cached data was fetched without year
+            // Check if we should enrich partial data (only applies if we have year now but didn't before)
+            // Or if we now have videoId but data doesn't?
             const shouldEnrich = year &&
                 cachedData.completeness === 'partial' &&
                 cachedData.status === 'success';
 
+            // Freshness Check implementation:
+            // If checkFreshness is true, we want to trigger a re-fetch even if we have data.
+            // But we return the Cached data IMMEDIATELY to the UI so it doesn't wait (Stale-While-Revalidate).
+            // However, since we are inside a message handler, we can't easily return twice.
+            // So the strategy is:
+            // 1. If we have data, return it immediately (sendResponse).
+            // 2. Spawn a background fetch WITHOUT awaiting it for the response.
+            // 3. When background fetch completes, it updates storage. 
+            // 4. Storage change listener (in ratings-store) will pick up the change and update UI.
+
             if (!shouldEnrich && !enrichExisting) {
+                // Migrate: Ensure we link this videoId to the data if it was found via Title mapping
+                if (videoId && !cachedData.netflixId) {
+                    log(`Linking existing data for "${title}" to ID ${videoId}`);
+                    cachedData.netflixId = videoId;
+                    await cacheManager.set(videoId, title, year, cachedData);
+                }
+
+                // Return valid cached data immediately
                 sendResponse({
                     success: cachedData.status !== 'error' && cachedData.status !== 'not_found',
                     data: cachedData,
                     source: cached.source
                 });
+
+                // Trigger background refresh if requested
+                if (checkFreshness) {
+                    log(`[Freshness] Triggering background refresh for "${title}"...`);
+                    // We don't await this, we just let it run
+                    performFetch(videoId, title, year, normalizedTitle, cached, requestKey).catch(e => logError('Background refresh error', e));
+                }
+
                 return;
             }
-
-            // Proceed to enrich if needed
-            if (shouldEnrich) {
-                log(`Enriching partial data for "${title}" with year ${year}`);
-            }
+            // Proceed to enrich...
         }
 
-        // Get API key
+        // ... Get API Key ...
         const storage = await chrome.storage.local.get(['omdbApiKey']);
         const apiKey = storage.omdbApiKey;
 
         if (!apiKey) {
-            // If no API key but we have cached data, return it anyway
             if (cached && cached.data && cached.data.status === 'success') {
-                sendResponse({
-                    success: true,
-                    data: cached.data,
-                    source: cached.source
-                });
+                sendResponse({ success: true, data: cached.data, source: cached.source });
                 return;
             }
             sendResponse({ success: false, error: 'NO_API_KEY' });
             return;
         }
 
-        // Create promise for request deduplication
-        const fetchPromise = (async () => {
-            try {
-                // Rate limit
-                await rateLimiter.acquire();
+        // ... Fetch Promise ...
+        const fetchPromise = performFetch(videoId, title, year, normalizedTitle, cached, requestKey, apiKey);
 
-                // Fetch from API
-                const apiData = await fetchFromOmdb(title, year, apiKey);
-
-                if (apiData && apiData.Response === 'True') {
-                    let normalizedData = normalizeOmdbResponse(apiData, normalizedTitle, year);
-
-                    // If we have existing cached data, merge to preserve any data we might not get new
-                    if (cached && cached.data && cached.data.status === 'success') {
-                        normalizedData = mergeRatingsData(cached.data, normalizedData);
-                    }
-
-                    // Store in cache
-                    await cacheManager.set(title, year, normalizedData);
-
-                    return {
-                        success: true,
-                        data: normalizedData,
-                        source: 'api'
-                    };
-                } else {
-                    // If we have cached data, return that instead of error
-                    if (cached && cached.data && cached.data.status === 'success') {
-                        return {
-                            success: true,
-                            data: cached.data,
-                            source: cached.source
-                        };
-                    }
-
-                    // Cache the failure with shorter TTL
-                    const errorData = {
-                        status: 'not_found',
-                        error: apiData?.Error || 'Movie not found',
-                        normalizedTitle,
-                        fetchedAt: Date.now()
-                    };
-                    await cacheManager.set(title, year, errorData);
-
-                    return {
-                        success: false,
-                        error: apiData?.Error || 'Movie not found'
-                    };
-                }
-            } catch (error) {
-                logError('API fetch error:', error);
-
-                // If we have cached data, return that on error
-                if (cached && cached.data && cached.data.status === 'success') {
-                    return {
-                        success: true,
-                        data: cached.data,
-                        source: cached.source
-                    };
-                }
-
-                return {
-                    success: false,
-                    error: error.message
-                };
-            } finally {
-                cacheManager.deletePendingRequest(requestKey);
-            }
-        })();
-
-        // Register pending request
         cacheManager.setPendingRequest(requestKey, fetchPromise);
-
-        // Wait for result
-        const result = await fetchPromise;
-        sendResponse(result);
+        sendResponse(await fetchPromise);
 
     } catch (error) {
         logError('Background error:', error);
@@ -411,8 +455,73 @@ async function handleFetchRatings(request, sendResponse) {
 }
 
 /**
+ * Core fetch logic extracted for reuse
+ */
+async function performFetch(videoId, title, year, normalizedTitle, cached, requestKey, apiKey = null) {
+    try {
+        if (!apiKey) {
+            const storage = await chrome.storage.local.get(['omdbApiKey']);
+            apiKey = storage.omdbApiKey;
+            if (!apiKey) throw new Error("NO_API_KEY");
+        }
+
+        // Rate limit
+        await rateLimiter.acquire();
+
+        // Fetch from API (OMDb needs title, cannot search by netflix ID)
+        if (!title) {
+            throw new Error("Cannot fetch without title");
+        }
+
+        const apiData = await fetchFromOmdb(title, year, apiKey);
+
+        if (apiData && apiData.Response === 'True') {
+            let normalizedData = normalizeOmdbResponse(apiData, normalizedTitle, year);
+
+            // Add netflixId
+            if (videoId) normalizedData.netflixId = videoId;
+
+            // Merge if needed
+            if (cached && cached.data && cached.data.status === 'success') {
+                normalizedData = mergeRatingsData(cached.data, normalizedData);
+            }
+
+            await cacheManager.set(videoId, title, year, normalizedData);
+
+            return { success: true, data: normalizedData, source: 'api' };
+        } else {
+            // If API fails but we had cached data that was "stale", keep using it?
+            // Usually OMDb failure means not found or error.
+
+            if (cached && cached.data && cached.data.status === 'success') {
+                // If this was a refresh, we just failed to update, no big deal.
+                return { success: true, data: cached.data, source: cached.source };
+            }
+
+            const errorData = {
+                status: 'not_found',
+                error: apiData?.Error || 'Movie not found',
+                normalizedTitle,
+                netflixId: videoId,
+                fetchedAt: Date.now()
+            };
+            await cacheManager.set(videoId, title, year, errorData);
+
+            return { success: false, error: apiData?.Error || 'Movie not found' };
+        }
+    } catch (error) {
+        logError('API fetch error:', error);
+        if (cached && cached.data && cached.data.status === 'success') {
+            return { success: true, data: cached.data, source: cached.source };
+        }
+        return { success: false, error: error.message };
+    } finally {
+        cacheManager.deletePendingRequest(requestKey);
+    }
+}
+
+/**
  * Merge existing cached data with fresh API data
- * Prefers fresh data but preserves existing values if fresh is null/N/A
  */
 function mergeRatingsData(existing, fresh) {
     const getValidValue = (newVal, oldVal) => {
@@ -422,13 +531,14 @@ function mergeRatingsData(existing, fresh) {
     };
 
     return {
-        // Identity - prefer fresh
+        // Identity
         imdbId: fresh.imdbId || existing.imdbId,
+        netflixId: fresh.netflixId || existing.netflixId,
         title: fresh.title || existing.title,
         normalizedTitle: fresh.normalizedTitle || existing.normalizedTitle,
         year: fresh.year || existing.year,
 
-        // Ratings - merge with preference for fresh valid values
+        // Ratings
         ratings: {
             imdb: {
                 score: getValidValue(fresh.ratings?.imdb?.score, existing.ratings?.imdb?.score),
@@ -448,7 +558,7 @@ function mergeRatingsData(existing, fresh) {
         metascore: getValidValue(fresh.metascore, existing.metascore),
         Ratings: fresh.Ratings?.length > 0 ? fresh.Ratings : existing.Ratings,
 
-        // Metadata - update to show enrichment
+        // Metadata
         status: 'success',
         completeness: fresh.completeness === 'full' || existing.completeness === 'full' ? 'full' : 'partial',
         fetchedAt: Date.now(),

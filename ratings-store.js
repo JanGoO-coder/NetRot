@@ -38,38 +38,59 @@ class RatingsStore {
      * @param {string|null} year - Optional release year
      * @returns {Promise<Object|null>} Ratings data or null
      */
-    async get(title, year = null) {
-        const key = this.getKey(title, year);
-        const altKey = this.getKey(title); // Year-less key for broader matching
+    /**
+     * Get ratings data, checking cache first then fetching if needed
+     * @param {string|null} videoId - Netflix Video ID (preferred)
+     * @param {string} title - Movie/show title
+     * @param {string|null} year - Optional release year
+     * @param {boolean} checkFreshness - If true, triggers a background refresh even if cached
+     * @returns {Promise<Object|null>} Ratings data or null
+     */
+    async get(videoId, title, year = null, checkFreshness = false) {
+        const key = this.getKey(videoId, title, year);
 
-        // Check exact key first
+        // precise hit
         if (this.cache.has(key)) {
-            return this.cache.get(key);
-        }
+            const cached = this.cache.get(key);
 
-        // Check alternate (year-less) key
-        if (year && this.cache.has(altKey)) {
-            const existing = this.cache.get(altKey);
-            // If we now have year and data is partial, consider enrichment
-            if (existing.completeness === 'partial') {
-                return this.fetchWithEnrichment(title, year, existing, key);
+            // If checking freshness, we generally want to trigger the background fetch
+            // But we can still return the cached value immediately.
+            // Our fetch() method implementation handles "pendingRequests", 
+            // so calling fetch() again might dedup if one is already flight.
+
+            if (checkFreshness) {
+                // Trigger background refresh (fire and forget from UI perspective, but update cache)
+                this.fetch(videoId, title, year, key, true);
             }
-            return existing;
+
+            return cached;
         }
 
-        // Not in cache, need to fetch
-        return this.fetch(title, year, key);
+        // If we have videoId, we rely on that. 
+        // If we only have title/year (fallback), we might try yearless matching.
+        if (!videoId && year) {
+            const altKey = this.getKey(null, title);
+            if (this.cache.has(altKey)) {
+                const existing = this.cache.get(altKey);
+
+                if (checkFreshness) {
+                    this.fetchWithEnrichment(null, title, year, existing, this.getKey(null, title, year));
+                } else if (existing.completeness === 'partial') {
+                    return this.fetchWithEnrichment(null, title, year, existing, this.getKey(null, title, year));
+                }
+                return existing;
+            }
+        }
+
+        // Not in cache, fetch
+        return this.fetch(videoId, title, year, key, checkFreshness);
     }
 
     /**
-     * Fetch ratings from background script with request deduplication
-     * @param {string} title - Movie/show title
-     * @param {string|null} year - Optional release year  
-     * @param {string} key - Cache key
-     * @returns {Promise<Object|null>} Ratings data or null
+     * Fetch ratings from background script
      */
-    async fetch(title, year, key) {
-        // Deduplicate concurrent requests for the same key
+    async fetch(videoId, title, year, key, checkFreshness = false) {
+        // Deduplicate
         if (this.pendingRequests.has(key)) {
             return this.pendingRequests.get(key);
         }
@@ -77,8 +98,10 @@ class RatingsStore {
         const promise = new Promise((resolve) => {
             chrome.runtime.sendMessage({
                 type: 'FETCH_RATINGS',
+                videoId,
                 title,
-                year
+                year,
+                checkFreshness
             }, (response) => {
                 this.pendingRequests.delete(key);
 
@@ -92,7 +115,6 @@ class RatingsStore {
                     this.set(key, response.data);
                     resolve(response.data);
                 } else {
-                    // Store error state to prevent repeated failed requests
                     const errorData = {
                         status: 'error',
                         error: response?.error || 'Unknown error',
@@ -109,15 +131,13 @@ class RatingsStore {
     }
 
     /**
-     * Fetch with enrichment for partial data
-     * @param {string} title - Movie/show title
-     * @param {string} year - Release year
-     * @param {Object} existing - Existing partial data
-     * @param {string} key - New cache key with year
-     * @returns {Promise<Object>} Enriched or existing data
+     * Fetch with enrichment (Legacy support mostly)
      */
-    async fetchWithEnrichment(title, year, existing, key) {
-        // Check if pending enrichment request exists
+    async fetchWithEnrichment(videoId, title, year, existing, key) {
+        // ... similar logic, mostly relevant if we are enriching a title-based partial record
+        // For ID-based records, we likely won't have "partial" in the same way, or the background handles it.
+        // Keeping it for compatibility if we ever fall back to title-based.
+
         if (this.pendingRequests.has(key)) {
             return this.pendingRequests.get(key);
         }
@@ -125,19 +145,16 @@ class RatingsStore {
         const promise = new Promise((resolve) => {
             chrome.runtime.sendMessage({
                 type: 'FETCH_RATINGS',
+                videoId, // pass it if we have it
                 title,
                 year,
                 enrichExisting: true
             }, (response) => {
                 this.pendingRequests.delete(key);
-
                 if (chrome.runtime.lastError || !response?.success) {
-                    // Keep existing data on failure
                     resolve(existing);
                     return;
                 }
-
-                // Merge data, preferring fresh values
                 const enriched = this.mergeData(existing, response.data);
                 this.set(key, enriched);
                 resolve(enriched);
@@ -150,74 +167,66 @@ class RatingsStore {
 
     /**
      * Set data in cache and notify subscribers
-     * @param {string} key - Cache key
-     * @param {Object} data - Ratings data
      */
     set(key, data) {
         this.cache.set(key, data);
 
-        // Also set by IMDb ID if available for cross-referencing
+        // Store by videoId if available in data
+        if (data.netflixId) {
+            const idKey = `netrot_${data.netflixId}`;
+            if (idKey !== key) this.cache.set(idKey, data);
+        }
+
+        // Store by IMDb ID
         if (data.imdbId) {
             this.cache.set(data.imdbId, data);
         }
 
-        // Also set by normalized title (without year) for broader matching
-        if (data.normalizedTitle && key !== data.normalizedTitle) {
+        // Normalized title
+        if (data.normalizedTitle) {
             this.cache.set(data.normalizedTitle, data);
         }
 
-        // Notify all subscribers
         this.notify(key, data);
     }
 
     /**
-     * Notify subscribers of data update
-     * @param {string} key - Primary cache key
-     * @param {Object} data - Updated data
+     * Generate cache key
+     * Priority: VideoID -> Title+Year -> Title
      */
-    notify(key, data) {
-        // Notify primary key subscribers
-        this.subscribers.get(key)?.forEach(cb => {
-            try {
-                cb(data);
-            } catch (e) {
-                console.error('[NetRot] Subscriber callback error:', e);
-            }
-        });
-
-        // Also notify IMDb ID subscribers
-        if (data.imdbId && data.imdbId !== key) {
-            this.subscribers.get(data.imdbId)?.forEach(cb => {
-                try {
-                    cb(data);
-                } catch (e) {
-                    console.error('[NetRot] Subscriber callback error:', e);
-                }
-            });
+    getKey(videoId, title, year = null) {
+        if (videoId) {
+            return `netrot_${videoId}`;
         }
-
-        // Notify normalized title subscribers
-        if (data.normalizedTitle && data.normalizedTitle !== key) {
-            this.subscribers.get(data.normalizedTitle)?.forEach(cb => {
-                try {
-                    cb(data);
-                } catch (e) {
-                    console.error('[NetRot] Subscriber callback error:', e);
-                }
-            });
-        }
+        const normalized = this.normalizeTitle(title);
+        return year ? `${normalized}_${year.substring(0, 4)}` : normalized;
     }
 
     /**
-     * Merge existing partial data with fresh data
-     * @param {Object} existing - Existing data
-     * @param {Object} fresh - Newly fetched data
-     * @returns {Object} Merged data
+     * Notify subscribers
      */
+    notify(key, data) {
+        const keysToNotify = new Set([key]);
+
+        if (data.netflixId) keysToNotify.add(`netrot_${data.netflixId}`);
+        if (data.imdbId) keysToNotify.add(data.imdbId);
+        if (data.normalizedTitle) keysToNotify.add(data.normalizedTitle);
+
+        keysToNotify.forEach(k => {
+            this.subscribers.get(k)?.forEach(cb => {
+                try { cb(data); } catch (e) { console.error(e); }
+            });
+        });
+    }
+
+    // ... (rest of methods: mergeData, getValidValue, normalizeTitle, has, clear, getStats)
+    // mergeData might needs updates if we add netflixId to data structure, but it uses spread ...fresh, so it should catch it.
+
     mergeData(existing, fresh) {
         return {
             ...existing,
             ...fresh,
+            netflixId: fresh.netflixId || existing.netflixId, // Ensure ID is preserved
             imdbId: fresh.imdbId || existing.imdbId,
             year: fresh.year || existing.year,
             ratings: {
@@ -237,64 +246,27 @@ class RatingsStore {
         };
     }
 
-    /**
-     * Get valid (non-N/A) value, preferring new over existing
-     * @param {string} newVal - New value
-     * @param {string} existingVal - Existing value
-     * @returns {string|null} Valid value or null
-     */
+    // ... rest of class logic ...
     getValidValue(newVal, existingVal) {
         if (newVal && newVal !== 'N/A') return newVal;
         if (existingVal && existingVal !== 'N/A') return existingVal;
         return null;
     }
 
-    /**
-     * Generate cache key from title and optional year
-     * @param {string} title - Movie/show title
-     * @param {string|null} year - Optional release year
-     * @returns {string} Cache key
-     */
-    getKey(title, year = null) {
-        const normalized = this.normalizeTitle(title);
-        return year ? `${normalized}_${year.substring(0, 4)}` : normalized;
-    }
-
-    /**
-     * Normalize title for consistent cache keys
-     * @param {string} title - Raw title
-     * @returns {string} Normalized title
-     */
     normalizeTitle(title) {
         return title.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
     }
 
-    /**
-     * Check if we have data for a title (any completeness level)
-     * @param {string} title - Movie/show title
-     * @param {string|null} year - Optional release year
-     * @returns {boolean} Whether data exists
-     */
-    has(title, year = null) {
-        const key = this.getKey(title, year);
-        if (this.cache.has(key)) return true;
-        if (year) return this.cache.has(this.getKey(title));
-        return false;
+    has(videoId, title, year = null) {
+        const key = this.getKey(videoId, title, year);
+        return this.cache.has(key);
     }
 
-    /**
-     * Clear all cached data (for testing/debugging)
-     */
     clear() {
         this.cache.clear();
         this.pendingRequests.clear();
-        // Keep subscribers - they may still want updates
     }
 
-    /**
-     * Get cache statistics for debugging
-     * @returns {Object} Cache stats
-     */
     getStats() {
         return {
             cacheSize: this.cache.size,

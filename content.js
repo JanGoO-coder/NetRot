@@ -48,8 +48,9 @@
     }
 
     function scanBrowseCards() {
+        // Use only the most specific selector to avoid nested duplicates
+        // .title-card-container is inside .slider-item, so only target the inner one
         const selectors = [
-            '.slider-item',
             '.title-card-container',
             '.boxart-round'
         ];
@@ -58,27 +59,39 @@
         cards.forEach(card => {
             if (card.hasAttribute(NETROT_SUBSCRIBED)) return;
 
+            // Skip if a parent element already has a badge (handles any remaining nesting)
+            if (card.closest('[netrot-subscribed="true"]')) return;
+
             const title = extractTitle(card);
+            const videoId = Utils.extractNetflixId(card);
+
             if (title) {
                 card.setAttribute(NETROT_SUBSCRIBED, 'true');
-                injectWithSubscription(card, title, null, 'card');
+                injectWithSubscription(card, videoId, title, null, 'card');
             }
         });
     }
 
     function scanDetailModals() {
-        const modals = document.querySelectorAll('.previewModal--container, .detail-modal, [data-uia="preview-modal-container"]');
+        // IMPORTANT: Only use .previewModal--container - NOT .detail-modal
+        // .detail-modal class appears on many nested elements within the modal
+        const modals = document.querySelectorAll('.previewModal--container, [data-uia="preview-modal-container"]');
 
         modals.forEach(modal => {
-            const container = modal.querySelector('.previewModal--detailsMetadata');
-            if (container && container.hasAttribute(NETROT_SUBSCRIBED)) return;
+            // Skip if this modal is nested inside another modal (shouldn't happen, but be safe)
+            if (modal.closest('[netrot-subscribed="true"]')) return;
+
+            // Skip if already has ANY netrot ratings anywhere inside
+            if (modal.querySelector('.netrot-detail-ratings, .netrot-hover-ratings')) return;
+            if (modal.hasAttribute(NETROT_SUBSCRIBED)) return;
 
             const title = extractTitleFromModal(modal);
             const year = extractYearFromModal(modal);
+            const videoId = Utils.extractNetflixId(modal);
 
             if (title) {
-                if (container) container.setAttribute(NETROT_SUBSCRIBED, 'true');
-                injectWithSubscription(modal, title, year, 'detail');
+                modal.setAttribute(NETROT_SUBSCRIBED, 'true');
+                injectWithSubscription(modal, videoId, title, year, 'detail');
             }
         });
     }
@@ -97,10 +110,19 @@
         cards.forEach(card => {
             if (card.hasAttribute(NETROT_SUBSCRIBED)) return;
 
+            // Skip if already has ANY netrot ratings
+            if (card.querySelector('.netrot-hover-ratings, .netrot-detail-ratings')) return;
+
+            // Skip if this is inside OR is a detail modal container (handled by scanDetailModals)
+            const detailSelectors = '.previewModal--container, [data-uia="preview-modal-container"]';
+            if (card.matches(detailSelectors) || card.closest(detailSelectors)) return;
+
             const title = extractTitleFromModal(card);
+            const videoId = Utils.extractNetflixId(card);
+
             if (title) {
                 card.setAttribute(NETROT_SUBSCRIBED, 'true');
-                injectWithSubscription(card, title, null, 'hover');
+                injectWithSubscription(card, videoId, title, null, 'hover');
             }
         });
     }
@@ -112,20 +134,27 @@
     /**
      * Inject ratings UI with subscription to store updates
      * @param {Element} element - Target element
+     * @param {string|null} videoId - Netflix Video ID
      * @param {string} title - Movie/show title
      * @param {string|null} year - Release year
      * @param {string} type - 'card', 'hover', or 'detail'
      */
-    function injectWithSubscription(element, title, year, type) {
+    function injectWithSubscription(element, videoId, title, year, type) {
+        // GLOBAL GUARD: Check if element already has any rating container
+        if (element.querySelector('.netrot-card-badge, .netrot-hover-ratings, .netrot-detail-ratings')) {
+            return;
+        }
+
         // Create placeholder container
         const container = createContainer(type);
         if (!container) return;
 
         // Position and attach container
-        attachContainer(element, container, type);
+        const attached = attachContainer(element, container, type);
+        if (!attached) return;  // Failed to attach, don't subscribe
 
         // Get cache key for subscription
-        const key = ratingsStore.getKey(title, year);
+        const key = ratingsStore.getKey(videoId, title, year);
 
         // Subscribe to updates
         const unsubscribe = ratingsStore.subscribe(key, (data) => {
@@ -136,7 +165,9 @@
         activeSubscriptions.set(element, unsubscribe);
 
         // Trigger fetch (will use cache if available)
-        ratingsStore.get(title, year);
+        // Refresh strategy: Refresh for 'detail' and 'hover' views to ensure freshness
+        const shouldRefresh = type === 'detail' || type === 'hover';
+        ratingsStore.get(videoId, title, year, shouldRefresh);
     }
 
     /**
@@ -166,8 +197,15 @@
 
     /**
      * Attach container to appropriate location in element
+     * @returns {boolean} true if attached successfully, false if duplicate or failed
      */
     function attachContainer(element, container, type) {
+        // Universal duplicate check - no ratings container of ANY type should exist
+        if (element.querySelector('.netrot-card-badge, .netrot-hover-ratings, .netrot-detail-ratings')) {
+            container.remove();
+            return false;
+        }
+
         switch (type) {
             case 'card':
                 // Ensure parent is relative for absolute positioning
@@ -175,39 +213,42 @@
                     element.style.position = 'relative';
                 }
                 element.appendChild(container);
-                break;
+                return true;
 
             case 'hover':
                 const metaArea = element.querySelector('.previewModal--tags, .previewModal--metadatAndControls-container, .evidence-list');
                 if (metaArea && metaArea.parentNode) {
                     metaArea.parentNode.insertBefore(container, metaArea.nextSibling);
+                    return true;
                 } else {
                     const infoSection = element.querySelector('.previewModal--info, .bob-overview');
                     if (infoSection) {
                         infoSection.appendChild(container);
+                        return true;
                     }
                 }
-                break;
+                container.remove();
+                return false;
 
             case 'detail':
-                // Guard against duplicates
-                if (element.querySelector('.netrot-detail-ratings')) {
-                    container.remove();
-                    return;
-                }
-
                 const synopsis = element.querySelector('.previewModal--text, .synopsis, .previewModal--synopsis');
                 if (synopsis && synopsis.parentNode) {
                     synopsis.parentNode.insertBefore(container, synopsis);
+                    return true;
                 } else {
                     const buttonRow = element.querySelector('.previewModal--metadatAndControls, .buttonControls');
                     if (buttonRow) {
                         buttonRow.parentNode.insertBefore(container, buttonRow.nextSibling);
+                        return true;
                     } else {
                         element.appendChild(container);
+                        return true;
                     }
                 }
-                break;
+
+            default:
+                container.remove();
+                return false;
         }
     }
 
