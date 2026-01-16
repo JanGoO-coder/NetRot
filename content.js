@@ -64,10 +64,11 @@
 
             const title = extractTitle(card);
             const videoId = Utils.extractNetflixId(card);
+            const year = extractYearFromElement(card);
 
             if (title) {
                 card.setAttribute(NETROT_SUBSCRIBED, 'true');
-                injectWithSubscription(card, videoId, title, null, 'card');
+                injectWithSubscription(card, videoId, title, year, 'card');
             }
         });
     }
@@ -119,10 +120,11 @@
 
             const title = extractTitleFromModal(card);
             const videoId = Utils.extractNetflixId(card);
+            const year = extractYearFromElement(card);
 
             if (title) {
                 card.setAttribute(NETROT_SUBSCRIBED, 'true');
-                injectWithSubscription(card, videoId, title, null, 'hover');
+                injectWithSubscription(card, videoId, title, year, 'hover');
             }
         });
     }
@@ -288,43 +290,89 @@
     // DATA EXTRACTION
     // =========================================================================
     function extractTitle(element) {
+        // Priority 1: Netflix's internal title data attribute
+        const titleEl = element.querySelector('[data-uia="title-text"], .title-text');
+        if (titleEl) return cleanTitle(titleEl.textContent);
+
+        // Priority 2: aria-label (common on cards)
         const ariaEl = element.querySelector('[aria-label], a[aria-label]');
         if (ariaEl) return cleanTitle(ariaEl.getAttribute('aria-label'));
 
+        // Priority 3: Image alt text
         const img = element.querySelector('img');
         if (img && img.alt) return cleanTitle(img.alt);
 
-        const textEl = element.querySelector('.fallback-text, .title-title');
+        // Priority 4: Fallback text elements
+        const textEl = element.querySelector('.fallback-text, .title-title, .boxart-title');
         if (textEl) return cleanTitle(textEl.textContent);
 
         return null;
     }
 
     function extractTitleFromModal(modal) {
+        // Priority 1: Boxart image in detail modal (most reliable for detail view)
+        // Try multiple selector variations to ensure we catch it
+        const boxartSelectors = [
+            '.previewModal--boxart img',
+            '.previewModal--poster img',
+            '[class*="boxart"] img',
+            '.ptrack-content img.boxart-image',
+            'img.previewModal--boxart',
+            'img[class*="boxart"]'
+        ];
+
+        for (const selector of boxartSelectors) {
+            const boxart = modal.querySelector(selector);
+            if (boxart && boxart.alt && boxart.alt.trim()) {
+                console.log('[NetRot] Found title from boxart:', boxart.alt);
+                return cleanTitle(boxart.alt);
+            }
+        }
+
+        // Priority 2: Title treatment logo
         const logo = modal.querySelector('.previewModal--player-titleTreatment-logo, img.logo');
         if (logo && logo.alt) return cleanTitle(logo.alt);
 
-        const header = modal.querySelector('.previewModal--section-header, h3');
+        // Priority 3: Section header
+        const header = modal.querySelector('.previewModal--section-header, h3, [data-uia="preview-modal-title"]');
         if (header) return cleanTitle(header.textContent);
 
+        // Priority 4: Fallback to generic title extraction
         return extractTitle(modal);
     }
 
-    function extractYearFromModal(modal) {
-        const yearEl = modal.querySelector('.year, .duration');
-        if (yearEl && /^\d{4}$/.test(yearEl.textContent)) {
-            return yearEl.textContent;
+    /**
+     * Extract year from any element (modal, card, hover)
+     * Searches for year patterns in metadata areas
+     */
+    function extractYearFromElement(element) {
+        // Try specific year elements first
+        const yearEl = element.querySelector('.year, .duration, [data-uia="year"], .videoMetadata--year');
+        if (yearEl && /^\d{4}$/.test(yearEl.textContent.trim())) {
+            return yearEl.textContent.trim();
         }
-        const metaText = modal.innerText;
-        const match = metaText.match(/\b(19|20)\d{2}\b/);
+
+        // Search in metadata area
+        const metaArea = element.querySelector('.previewModal--metadatAndControls, .meta, .evidence-list, .supplementalMessage');
+        if (metaArea) {
+            const match = metaArea.innerText.match(/\b(19|20)\d{2}\b/);
+            if (match) return match[0];
+        }
+
+        // Last resort: search entire element (limited depth)
+        const match = element.innerText?.substring(0, 500).match(/\b(19|20)\d{2}\b/);
         return match ? match[0] : null;
     }
+
+    // Alias for backward compatibility
+    const extractYearFromModal = extractYearFromElement;
 
     function cleanTitle(title) {
         if (!title) return null;
         return title
             .replace(/Netflix/i, '')
-            .split(':')[0]
+            .replace(/^Watch\s+/i, '')
+            // Don't split on colon - keeps full series titles like "Stranger Things: Season 4"
             .trim();
     }
 
@@ -374,21 +422,29 @@
         let items = [];
 
         if (userSettings.showImdb) {
-            const score = getRating(data, 'imdb') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na' : '';
-            items.push(`<span class="netrot-badge-item netrot-imdb${naClass}"><span class="netrot-badge-icon">★</span><span class="netrot-badge-score">${score}</span><span class="netrot-badge-label">IMDb</span></span>`);
+            const score = getRating(data, 'imdb');
+            if (score) {
+                items.push(`<span class="netrot-badge-item netrot-imdb"><span class="netrot-badge-icon">★</span><span class="netrot-badge-score">${score}</span><span class="netrot-badge-label">IMDb</span></span>`);
+            }
         }
 
         if (userSettings.showRotten) {
-            const score = getRating(data, 'rt') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na' : '';
-            items.push(`<span class="netrot-badge-item netrot-rt${naClass}"><span class="netrot-badge-icon">🍅</span><span class="netrot-badge-score">${score}</span><span class="netrot-badge-label">RT</span></span>`);
+            const score = getRating(data, 'rt');
+            if (score) {
+                items.push(`<span class="netrot-badge-item netrot-rt"><span class="netrot-badge-icon">🍅</span><span class="netrot-badge-score">${score}</span><span class="netrot-badge-label">RT</span></span>`);
+            }
         }
 
         if (userSettings.showMetacritic) {
-            const score = getRating(data, 'meta') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na' : '';
-            items.push(`<span class="netrot-badge-item netrot-meta${naClass}"><span class="netrot-badge-icon">M</span><span class="netrot-badge-score">${score}</span><span class="netrot-badge-label">Meta</span></span>`);
+            const score = getRating(data, 'meta');
+            if (score) {
+                items.push(`<span class="netrot-badge-item netrot-meta"><span class="netrot-badge-icon">M</span><span class="netrot-badge-score">${score}</span><span class="netrot-badge-label">Meta</span></span>`);
+            }
+        }
+
+        // If no ratings available, show a subtle indicator
+        if (items.length === 0) {
+            return '<span class="netrot-badge-item netrot-no-data"><span class="netrot-badge-score">—</span></span>';
         }
 
         return items.join('');
@@ -398,19 +454,27 @@
         let items = [];
 
         if (userSettings.showImdb) {
-            const score = getRating(data, 'imdb') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na' : '';
-            items.push(`<span class="netrot-hover-item netrot-imdb${naClass}">★ ${score} <small>IMDb</small></span>`);
+            const score = getRating(data, 'imdb');
+            if (score) {
+                items.push(`<span class="netrot-hover-item netrot-imdb">★ ${score} <small>IMDb</small></span>`);
+            }
         }
         if (userSettings.showRotten) {
-            const score = getRating(data, 'rt') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na' : '';
-            items.push(`<span class="netrot-hover-item netrot-rt${naClass}">🍅 ${score} <small>RT</small></span>`);
+            const score = getRating(data, 'rt');
+            if (score) {
+                items.push(`<span class="netrot-hover-item netrot-rt">🍅 ${score} <small>RT</small></span>`);
+            }
         }
         if (userSettings.showMetacritic) {
-            const score = getRating(data, 'meta') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na' : '';
-            items.push(`<span class="netrot-hover-item netrot-meta${naClass}">M ${score} <small>Meta</small></span>`);
+            const score = getRating(data, 'meta');
+            if (score) {
+                items.push(`<span class="netrot-hover-item netrot-meta">M ${score} <small>Meta</small></span>`);
+            }
+        }
+
+        // If no ratings, show minimal indicator
+        if (items.length === 0) {
+            items.push('<span class="netrot-hover-item netrot-no-data">No ratings</span>');
         }
 
         return `<div class="netrot-hover-row">${items.join('')}</div>`;
@@ -420,21 +484,29 @@
         let cards = [];
 
         if (userSettings.showImdb) {
-            const score = getRating(data, 'imdb') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na-card' : '';
-            cards.push(createCard('IMDb', score, '★', 'netrot-imdb-card' + naClass));
+            const score = getRating(data, 'imdb');
+            if (score) {
+                cards.push(createCard('IMDb', score, '★', 'netrot-imdb-card'));
+            }
         }
 
         if (userSettings.showRotten) {
-            const score = getRating(data, 'rt') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na-card' : '';
-            cards.push(createCard('Rotten Tomatoes', score, '🍅', 'netrot-rt-card' + naClass));
+            const score = getRating(data, 'rt');
+            if (score) {
+                cards.push(createCard('Rotten Tomatoes', score, '🍅', 'netrot-rt-card'));
+            }
         }
 
         if (userSettings.showMetacritic) {
-            const score = getRating(data, 'meta') || 'N/A';
-            const naClass = score === 'N/A' ? ' netrot-na-card' : '';
-            cards.push(createCard('Metacritic', score, 'M', 'netrot-meta-card' + naClass));
+            const score = getRating(data, 'meta');
+            if (score) {
+                cards.push(createCard('Metacritic', score, 'M', 'netrot-meta-card'));
+            }
+        }
+
+        // Show message if no ratings available
+        if (cards.length === 0) {
+            cards.push('<div class="netrot-no-ratings">No ratings available</div>');
         }
 
         return `<div class="netrot-ratings-row">${cards.join('')}</div>`;

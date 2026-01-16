@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NetRot - Netflix Ratings Overlay",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Integrates Rotten Tomatoes and IMDb ratings into Netflix.",
   "permissions": [
     "storage"

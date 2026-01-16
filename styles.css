@@ -307,3 +307,103 @@
         font-size: 16px;
     }
 }
+
+/* -------------------------------------------------------------------------
+   6. REFRESH BUTTON
+   ------------------------------------------------------------------------- */
+.netrot-refresh-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    background: transparent;
+    border: none;
+    color: #999;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
+    margin-left: 8px;
+    border-radius: 50%;
+
+    transition: color 0.2s, background 0.2s, transform 0.2s;
+}
+
+.netrot-refresh-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.netrot-refresh-btn:active {
+    transform: rotate(180deg);
+}
+
+.netrot-refresh-icon {
+    display: block;
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
+}
+
+/* Add refresh to hover view */
+.netrot-hover-row .netrot-refresh-btn {
+    font-size: 12px;
+    width: 20px;
+    height: 20px;
+    margin-left: auto;
+    /* Push to right */
+}
+
+/* Add refresh to detail view */
+.netrot-ratings-row .netrot-refresh-btn {
+    width: 32px;
+    height: 32px;
+    background: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+/* Spinning animation for refresh button */
+.netrot-spinning {
+    animation: netrotSpin 1s linear infinite;
+}
+
+@keyframes netrotSpin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* -------------------------------------------------------------------------
+   7. NO RATINGS STATE
+   ------------------------------------------------------------------------- */
+.netrot-no-data,
+.netrot-no-ratings {
+    color: #666;
+    font-size: 12px;
+    font-style: italic;
+}
+
+.netrot-badge-item.netrot-no-data {
+    opacity: 0.6;
+}
+
+.netrot-badge-item.netrot-no-data .netrot-badge-score {
+    color: #666;
+    font-size: 14px;
+}
+
+.netrot-hover-item.netrot-no-data {
+    opacity: 0.6;
+    font-size: 11px;
+}
+
+.netrot-no-ratings {
+    padding: 10px 14px;
+    background: #2a2a2a;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}

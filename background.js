@@ -603,9 +603,10 @@ async function handleClearCache(sendResponse) {
 // ============================================================================
 
 /**
- * Fetch data from OMDb API
+ * Fetch data from OMDb API with fallback search
  */
 async function fetchFromOmdb(title, year, apiKey) {
+    // Step 1: Try exact match first
     let url = `https://www.omdbapi.com/?t=${encodeURIComponent(title)}&apikey=${apiKey}&tomatoes=true`;
 
     if (year) {
@@ -614,18 +615,136 @@ async function fetchFromOmdb(title, year, apiKey) {
     }
 
     try {
-        log(`Fetching from OMDb: "${title}" (${year || 'no year'})`);
+        log(`[API] Fetching exact match: ${url.replace(apiKey, 'HIDDEN_KEY')}`);
         const res = await fetch(url);
 
         if (!res.ok) {
             throw new Error(`HTTP ${res.status}`);
         }
 
-        return await res.json();
+        const json = await res.json();
+        log(`[API] Response:`, json);
+
+        // If exact match found, return it
+        if (json.Response === 'True') {
+            return json;
+        }
+
+        // Step 2: Exact match failed - try fuzzy search
+        log(`[API] Exact match failed for "${title}", trying search fallback...`);
+        return await searchOmdbFallback(title, year, apiKey);
+
     } catch (e) {
         logError('OMDb fetch failed:', e);
         throw e;
     }
+}
+
+/**
+ * Fallback search when exact match fails
+ * Uses OMDb search API to find candidates, then fetches best match
+ */
+async function searchOmdbFallback(title, year, apiKey) {
+    try {
+        // Clean title for search - remove some common suffixes
+        const searchTitle = title
+            .replace(/\s*\(.*?\)\s*/g, '')  // Remove parentheticals
+            .replace(/\s*-\s*Season\s*\d+/i, '')  // Remove Season suffixes
+            .replace(/\s*:\s*Season\s*\d+/i, '')
+            .trim();
+
+        let searchUrl = `https://www.omdbapi.com/?s=${encodeURIComponent(searchTitle)}&apikey=${apiKey}`;
+        if (year) {
+            searchUrl += `&y=${year.substring(0, 4)}`;
+        }
+
+        log(`[API] Search fallback: ${searchUrl.replace(apiKey, 'HIDDEN_KEY')}`);
+        const searchRes = await fetch(searchUrl);
+        const searchJson = await searchRes.json();
+
+        if (searchJson.Response !== 'True' || !searchJson.Search?.length) {
+            log(`[API] Search returned no results`);
+            return { Response: 'False', Error: 'Movie not found' };
+        }
+
+        // Find best match from search results
+        const bestMatch = findBestMatch(title, searchJson.Search);
+
+        if (!bestMatch) {
+            return { Response: 'False', Error: 'No suitable match found' };
+        }
+
+        log(`[API] Best match found: "${bestMatch.Title}" (${bestMatch.imdbID})`);
+
+        // Step 3: Fetch full details for best match using IMDb ID
+        const detailUrl = `https://www.omdbapi.com/?i=${bestMatch.imdbID}&apikey=${apiKey}&tomatoes=true`;
+        log(`[API] Fetching details: ${detailUrl.replace(apiKey, 'HIDDEN_KEY')}`);
+
+        const detailRes = await fetch(detailUrl);
+        return await detailRes.json();
+
+    } catch (e) {
+        logError('Search fallback error:', e);
+        return { Response: 'False', Error: e.message };
+    }
+}
+
+/**
+ * Find best match from search results using simple similarity scoring
+ */
+function findBestMatch(originalTitle, searchResults) {
+    const normalizedOriginal = originalTitle.toLowerCase().trim();
+
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const result of searchResults) {
+        const resultTitle = result.Title.toLowerCase().trim();
+
+        // Calculate similarity score
+        let score = 0;
+
+        // Exact match (case-insensitive)
+        if (resultTitle === normalizedOriginal) {
+            score = 100;
+        }
+        // Starts with original title
+        else if (resultTitle.startsWith(normalizedOriginal)) {
+            score = 80;
+        }
+        // Original starts with result (result is shorter)
+        else if (normalizedOriginal.startsWith(resultTitle)) {
+            score = 70;
+        }
+        // Contains original title
+        else if (resultTitle.includes(normalizedOriginal)) {
+            score = 60;
+        }
+        // Original contains result title
+        else if (normalizedOriginal.includes(resultTitle)) {
+            score = 50;
+        }
+        // Partial word match
+        else {
+            const originalWords = normalizedOriginal.split(/\s+/);
+            const resultWords = resultTitle.split(/\s+/);
+            const matchingWords = originalWords.filter(w => resultWords.includes(w));
+            score = (matchingWords.length / originalWords.length) * 40;
+        }
+
+        // Prefer movies over series if scores are close
+        if (result.Type === 'movie' && score > 0) {
+            score += 5;
+        }
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMatch = result;
+        }
+    }
+
+    // Only return if we have a reasonable match (score >= 40)
+    return bestScore >= 40 ? bestMatch : null;
 }
 
 /**
